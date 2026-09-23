@@ -69,13 +69,59 @@ PluginComponent {
 
     readonly property bool cuesEnabled: opt("enabled", false) === true
     readonly property bool autoHide: opt("autoHide", true) === true
-    readonly property int dotSize: opt("dotSize", 8)
-    readonly property int dotSpacing: opt("dotSpacing", 56)
-    // 0 = cover the whole screen instead of just a band along each edge.
-    readonly property int bandWidth: opt("bandWidth", 150)
+    /*
+      Geometry settings are 0 = AUTO by default, resolved per screen as a
+      fraction of its SHORT side.
+
+      They used to be absolute pixels, which is wrong for a cue that has to
+      work on whatever the shell is running on: 150 px of edge band is 7.8%
+      per side of a 16" laptop at 1920x1200 logical, and about half the screen
+      on a phone-sized tablet. The fractions below are keyed to the short side
+      so a rotated screen gets the same band it had in landscape, and they are
+      what makes the dots subtend roughly the same angle on a laptop at arm's
+      length as on a handheld -- which is the thing that actually matters,
+      since peripheral vision is what reads them.
+
+      The band is a QUARTER of the short side, settled by looking at it on a
+      16" panel rather than by derivation: at 18% the field read as a thin
+      trim rather than a presence, and the centre has plenty of room to spare
+      at 25% (300 px per edge of 1200, leaving 600 px of clear height).
+
+      Any non-zero value overrides its fraction and is taken as literal pixels.
+    */
+    readonly property int dotSize: opt("dotSize", 0)
+    readonly property int dotSpacing: opt("dotSpacing", 0)
+    readonly property int bandWidth: opt("bandWidth", 0)
+    // Separate from bandWidth because 0 there now means "auto", so it can no
+    // longer double as the "no band, cover everything" sentinel.
+    readonly property bool coverWholeScreen: opt("coverWholeScreen", false) === true
+
+    function autoDot(shortSide) { return Math.max(4, Math.round(shortSide * 0.009)); }
+    function autoSpacing(shortSide) { return Math.max(16, Math.round(shortSide * 0.06)); }
+    function autoBand(shortSide) { return Math.max(40, Math.round(shortSide * 0.25)); }
+    function autoShift(shortSide) { return Math.max(16, Math.round(shortSide * 0.07)); }
     readonly property int intensity: opt("intensity", 65)
     readonly property int sensitivity: opt("sensitivity", 100)
-    readonly property int maxShift: opt("maxShift", 64)
+    /*
+      Travel is root-level because the whole field, on every screen, shifts by
+      the same amount -- the vehicle accelerates once.
+
+      Its auto size comes from refShortSide, which the overlays report from
+      their own laid-out geometry, NOT from ShellScreen.width. That is
+      deliberate: ShellScreen mixes physical and logical units depending on
+      the property, and its devicePixelRatio has been observed to come back
+      undefined here (see the same warning in ColumnSeamDrag.qml), which would
+      silently turn every derived size into NaN. A PanelWindow's own
+      width/height are already the logical pixels the dots are laid out in.
+    */
+    property real refShortSide: 0
+
+    readonly property int maxShift: {
+        const set = opt("maxShift", 0);
+        if (set > 0)
+            return set;
+        return refShortSide > 0 ? autoShift(refShortSide) : 64;
+    }
     readonly property bool flipForeAft: opt("flipForeAft", false) === true
     readonly property string accelDevice: opt("accelDevice", "")
     readonly property int sampleRate: opt("sampleRate", 100)
@@ -649,6 +695,23 @@ PluginComponent {
             // overlay would swallow the entire screen's input.
             mask: Region {}
 
+            // Logical short side of THIS screen -- the basis for every auto
+            // size. Divided by the device pixel ratio because QML lays out in
+            // logical pixels while ShellScreen reports physical ones.
+            readonly property real shortSide: Math.min(width, height)
+
+            // Smallest screen wins, so the travel never overruns the band on
+            // whichever display is tightest.
+            onShortSideChanged: {
+                if (shortSide > 0 && (root.refShortSide <= 0 || shortSide < root.refShortSide))
+                    root.refShortSide = shortSide;
+            }
+            readonly property int effDot: shortSide > 0
+                ? (root.dotSize > 0 ? root.dotSize : root.autoDot(shortSide)) : 0
+            readonly property int effSpacing: root.dotSpacing > 0 ? root.dotSpacing : root.autoSpacing(shortSide)
+            readonly property int effBand: root.coverWholeScreen ? 0
+                                         : (root.bandWidth > 0 ? root.bandWidth : root.autoBand(shortSide))
+
             property var dots: []
 
             /*
@@ -667,8 +730,8 @@ PluginComponent {
                     dots = [];
                     return;
                 }
-                const sp = Math.max(8, root.dotSpacing);
-                const band = root.bandWidth;
+                const sp = Math.max(8, effSpacing);
+                const band = effBand;
                 const pad = root.maxShift + sp;
                 const out = [];
                 for (let y = -pad; y < h + pad; y += sp) {
@@ -695,10 +758,11 @@ PluginComponent {
             onHeightChanged: rebuild()
             Component.onCompleted: rebuild()
 
+            onEffSpacingChanged: rebuild()
+            onEffBandChanged: rebuild()
+
             Connections {
                 target: root
-                function onDotSpacingChanged() { overlay.rebuild(); }
-                function onBandWidthChanged() { overlay.rebuild(); }
                 function onMaxShiftChanged() { overlay.rebuild(); }
             }
 
@@ -728,8 +792,8 @@ PluginComponent {
                             id: dot
                             required property var modelData
 
-                            width: root.dotSize
-                            height: root.dotSize
+                            width: overlay.effDot
+                            height: overlay.effDot
                             x: modelData.dx - width / 2
                             y: modelData.dy - height / 2
                             opacity: modelData.op

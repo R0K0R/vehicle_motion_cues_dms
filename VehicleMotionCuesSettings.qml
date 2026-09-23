@@ -64,10 +64,10 @@ PluginSettings {
     SliderSetting {
         settingKey: "maxShift"
         label: "Maximum travel"
-        description: "Furthest the dot field will move from centre."
-        defaultValue: 64
-        minimum: 16
-        maximum: 160
+        description: "Furthest the dot field moves from centre. 0 scales it to the screen (7% of the short side)."
+        defaultValue: 0
+        minimum: 0
+        maximum: 220
         unit: "px"
     }
 
@@ -80,32 +80,49 @@ PluginSettings {
         unit: "%"
     }
 
+    StyledText {
+        width: parent.width
+        text: "Sizes below are 0 by default, meaning they scale with the display — a fraction of its short side, so the dots subtend about the same angle on a 16\" laptop as on a tablet. Set any of them to a real number to pin it in pixels instead."
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+    }
+
     SliderSetting {
         settingKey: "dotSize"
         label: "Dot size"
-        defaultValue: 8
-        minimum: 3
-        maximum: 20
+        description: "0 = scale to the screen (0.9% of the short side)."
+        defaultValue: 0
+        minimum: 0
+        maximum: 28
         unit: "px"
     }
 
     SliderSetting {
         settingKey: "dotSpacing"
         label: "Dot spacing"
-        defaultValue: 56
-        minimum: 24
-        maximum: 140
+        description: "0 = scale to the screen (6% of the short side)."
+        defaultValue: 0
+        minimum: 0
+        maximum: 200
         unit: "px"
     }
 
     SliderSetting {
         settingKey: "bandWidth"
         label: "Edge band"
-        description: "Thickness of the dotted border. Set to 0 to cover the whole screen instead of just the edges."
-        defaultValue: 150
+        description: "Thickness of the dotted border. 0 = scale to the screen (25% of the short side)."
+        defaultValue: 0
         minimum: 0
-        maximum: 600
+        maximum: 700
         unit: "px"
+    }
+
+    ToggleSetting {
+        settingKey: "coverWholeScreen"
+        label: "Cover the whole screen"
+        description: "Fill the display with dots instead of banding them around the edges. Overrides the edge band."
+        defaultValue: false
     }
 
     Rectangle {
