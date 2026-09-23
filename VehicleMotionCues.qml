@@ -381,44 +381,77 @@ PluginComponent {
     }
 
     /*
-      Screen-right and direction-of-travel as unit vectors in the DEVICE frame,
-      given the unit gravity vector.
+      Screen-right and direction-of-travel as unit vectors in the DEVICE frame.
 
-      Screen-right is the device's +x with any component along gravity removed,
-      so it stays horizontal however the screen is tilted. Forward is then the
-      remaining horizontal direction, r x g -- which resolves to -z (into the
-      screen, away from a viewer facing forward) when the device is upright,
-      and to +y when it is lying flat with the screen up. Both are the
-      direction of travel, which is the point of deriving them this way.
+      THE ROTATION PROBLEM. This used to take screen-right to be the device's
+      physical +x with the gravity component removed. That is only true at
+      transform 0: once the compositor rotates the output, the screen's
+      rightward direction is some other device axis, and the dots kept sliding
+      along the unrotated frame -- braking moved them sideways on a rotated
+      screen.
 
-      The degenerate case is the device balanced on its side edge, where +x
-      points at the floor and the projection collapses; fall back to the
-      device's +y as the in-plane reference.
+      THE FIX, WITHOUT KNOWING THE TRANSFORM. Autorotation exists precisely to
+      keep the screen's "up" pointing at the world's up. So screen-DOWN, in the
+      device frame, simply IS the gravity vector projected into the screen
+      plane -- whatever the transform happens to be. Take that as the basis and
+      screen-right follows as n x d (n being the screen normal, +z), with no
+      reference to the compositor at all. Nothing to configure, nothing to keep
+      in sync, and it is self-correcting: however the screen got rotated, and
+      by whom, the dots follow.
+
+      Sanity checks. Upright and unrotated: g = (0,-1,0), so d = (0,-1,0) and
+      r = n x d = (1,0,0) -- the device's own +x, as before. Turned 90 deg
+      counter-clockwise with autorotate compensating: g = (-1,0,0), so
+      d = (-1,0,0) and r = (0,-1,0), the device's -y. Both correct.
+
+      WHEN GRAVITY CANNOT ANSWER. Two cases, one rule. Lying flat, the in-plane
+      component of gravity collapses to noise. Rotation locked, the screen is
+      deliberately NOT following gravity, so gravity would give the wrong
+      basis. In both the honest answer is the last basis that was trustworthy,
+      which is exactly right: a locked screen's axes should freeze at the
+      moment it locked, and a tablet laid flat should keep the axes it had
+      while it was upright.
     */
-    function screenAxes(ux, uy, uz) {
-        let rx = 1 - ux * ux;
-        let ry = -ux * uy;
-        let rz = -ux * uz;
-        let rn = Math.sqrt(rx * rx + ry * ry + rz * rz);
-        if (rn < 0.15) {
-            rx = -uy * ux;
-            ry = 1 - uy * uy;
-            rz = -uy * uz;
-            rn = Math.sqrt(rx * rx + ry * ry + rz * rz);
-            if (rn < 1e-6)
-                return { rx: 1, ry: 0, rz: 0, fx: 0, fy: 0, fz: -1 };
-        }
-        rx /= rn;
-        ry /= rn;
-        rz /= rn;
+    property var lastAxes: null
 
-        // f = r x g, already unit length since both are unit and perpendicular.
-        return {
+    function screenAxes(ux, uy, uz) {
+        const dn = Math.sqrt(ux * ux + uy * uy);
+
+        if ((rotationLocked || dn < 0.35) && lastAxes)
+            return lastAxes;
+
+        let rx, ry, rz;
+        if (dn >= 0.35) {
+            // d = in-plane gravity (screen down); r = n x d with n = (0,0,1).
+            const dx = ux / dn, dy = uy / dn;
+            rx = -dy;
+            ry = dx;
+            rz = 0;
+        } else {
+            // First samples, flat, with no history to fall back on: assume the
+            // screen is not rotated rather than refusing to draw anything.
+            rx = 1 - ux * ux;
+            ry = -ux * uy;
+            rz = -ux * uz;
+            const rn = Math.sqrt(rx * rx + ry * ry + rz * rz);
+            if (rn < 1e-6)
+                return lastAxes || { rx: 1, ry: 0, rz: 0, fx: 0, fy: 0, fz: -1 };
+            rx /= rn;
+            ry /= rn;
+            rz /= rn;
+        }
+
+        // Direction of travel: the remaining horizontal axis, f = r x g.
+        // Already unit length, r and g being unit and perpendicular.
+        const axes = {
             rx: rx, ry: ry, rz: rz,
             fx: ry * uz - rz * uy,
             fy: rz * ux - rx * uz,
             fz: rx * uy - ry * ux
         };
+        if (!rotationLocked)
+            lastAxes = axes;
+        return axes;
     }
 
     // Hysteresis plus a linger, so a red light does not blink the dots away
@@ -434,7 +467,9 @@ PluginComponent {
 
     Timer {
         id: preview
-        interval: 10000
+        // Long enough to pick the machine up and turn it over while watching,
+        // which is the only way to check the axes actually follow a rotation.
+        interval: 45000
         repeat: false
         onTriggered: root.previewing = false
     }
@@ -629,7 +664,10 @@ PluginComponent {
             return root.rotationLocked ? "locked" : "unlocked";
         }
         function orientation(): string {
+            const a = root.lastAxes;
             return "transform=" + root.screenTransform
+                + (a ? " screenRight=[" + a.rx.toFixed(2) + "," + a.ry.toFixed(2)
+                       + "," + a.rz.toFixed(2) + "]" : " screenRight=unset")
                 + " proposed=" + root.proposedTransform
                 + " map=" + root.transformMap
                 + (root.rotationLocked ? " locked" : "")
@@ -641,7 +679,7 @@ PluginComponent {
                 root.setEnabled(true);
             root.previewing = true;
             preview.restart();
-            return "showing the dot field for 10s";
+            return "showing the dot field for 45s";
         }
 
         function status(): string {
