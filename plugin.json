@@ -1,0 +1,20 @@
+{
+    "id": "vehicleMotionCues",
+    "name": "Vehicle Motion Cues",
+    "description": "Apple's iOS 18 motion-sickness aid: dots at the screen edges shift against the vehicle's acceleration, so your eyes see the motion your inner ear feels. Also serves screen orientation, because the accelerometer's IIO buffer has only one owner. Driven by `dms ipc call vehicleMotionCues ...`",
+    "version": "1.0.0",
+    "author": "r0k0r",
+    "type": "daemon",
+    "icon": "directions_car",
+    "capabilities": ["ipc"],
+    "components": {
+        "daemon": "./VehicleMotionCues.qml"
+    },
+    "settings": "./VehicleMotionCuesSettings.qml",
+    "requires": ["python3"],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
