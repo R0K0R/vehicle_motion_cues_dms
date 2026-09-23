@@ -80,19 +80,65 @@ sudo python3 tools/sensor-probe.py     # then tilt it for ~40s
 
 ## Installation
 
-Buffer access is root-only on a stock system. The udev rule hands it to the
-`input` group; nothing runs as root at runtime:
+Pin it as a flake input — it is plugin sources, not a flake, so `flake = false`:
 
 ```nix
-# hosts/<host>/accelerometer.nix, imported from the host's default.nix
+inputs.vehicle-motion-cues = {
+  url = "github:R0K0R/vehicle_motion_cues_dms";
+  flake = false;
+};
 ```
 
-Then register the plugin (see `features/dms/plugins.nix`) and set the rotation
-source:
+and point DMS at the checkout:
 
 ```nix
-my.desktop.autorotate = "motion-cues";
+programs.dank-material-shell.plugins.vehicleMotionCues = {
+  enable = true;
+  src = inputs.vehicle-motion-cues;
+  settings = {
+    compositor = "hyprland";
+    monitor = "eDP-1";
+    manageRotation = true;              # see "Why it also does screen rotation"
+    rotateCommand = "<path to the hyprctl transform shim>";
+  };
+};
 ```
+
+Buffer access is root-only on a stock system; a udev rule hands it to the
+`input` group, and nothing runs as root at runtime:
+
+```nix
+services.udev.extraRules = ''
+  SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTR{name}=="accel_3d", \
+    MODE="0640", GROUP="input", RUN+="${openBuffer} %p"
+'';
+```
+
+where `openBuffer` also hands over the `buffer/`, `scan_elements/` and
+`in_accel_sampling_frequency` attributes — `GROUP=`/`MODE=` only cover the
+device node. A complete version ships as `hosts/<host>/accelerometer.nix` in
+the config this was written for.
+
+### Iterating on it
+
+`src` is a store path, so an edit needs a push and a re-pin. To skip that while
+working on it, either point the plugin directory straight at a checkout:
+
+```
+ln -sfn /path/to/checkout ~/.config/DankMaterialShell/plugins/vehicleMotionCues
+systemctl --user restart dms.service     # QML caches components per path
+```
+
+(add a home-manager activation guard to remove that symlink, or the next
+`switch` will refuse to clobber it), or override the input for one build:
+
+```
+nixos-rebuild switch --flake . --override-input vehicle-motion-cues /path/to/checkout
+```
+
+A DMS restart is required after **every** QML edit — `dms ipc call plugins
+reload` does not pick changes up, because QML caches compiled components by
+URL.
 
 ## Two design notes
 
