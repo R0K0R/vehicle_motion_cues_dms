@@ -55,6 +55,22 @@ PluginComponent {
     // device does not leave the dots stuck off-centre.
     readonly property real gravityTau: 2.5
 
+    /*
+      A second, FAST estimate of gravity, for orientation only.
+
+      Orientation used to read the slow estimate above, which made the screen
+      take about three seconds to follow a turn: ~2.3 s for a 2.5 s low-pass to
+      swing into the new quadrant's window, plus the dwell. The slow filter is
+      right for the cues and wrong for this -- orientation does not care about
+      braking contaminating the vector by a few degrees, because quadrantFor()
+      already ignores anything short of 35 deg from a quadrant centre. So it
+      gets its own short time constant, and the dwell does the debouncing.
+    */
+    readonly property real orientTau: 0.15
+    property real ogx: 0
+    property real ogy: 0
+    property real ogz: 0
+
     // Smoothing on the in-plane acceleration. At ~100 Hz the raw signal is far
     // noisier than the cue wants, and the dots should read as a swell rather
     // than a twitch.
@@ -158,7 +174,7 @@ PluginComponent {
     // ------------------------------------------------------------ live state
 
     property bool sensorOk: false
-    // "", "busy", "denied", "missing", "stalled" -- what to tell the user.
+    // "", "busy", "denied", "missing" -- what to tell the user.
     property string sensorFault: ""
 
     // Gravity estimate in the device frame, m/s^2.
@@ -265,18 +281,31 @@ PluginComponent {
         }
     }
 
-    // Samples should arrive every ~10 ms. A whole second of silence means the
-    // stream has stalled -- drop the dots rather than leave them frozen
-    // mid-shift, which would be a misleading cue.
+    /*
+      SILENCE IS NOT FAILURE. The HID sensor hub only reports on change, even
+      through the buffer: measured at 0 samples in 6 s with the machine at
+      rest, against ~99 Hz while it was being tilted. So a quiet stream means
+      "nothing is accelerating", not "the sensor died" -- a stationary car at
+      a red light produces exactly this.
+
+      This used to mark the sensor dead after 1 s of quiet, which faded the dots
+      out at every stop and showed "no data (stalled)". Now a quiet second is
+      read as zero acceleration: the field relaxes to centre and the auto-hide
+      heuristic sees stillness, exactly as if samples of "no motion" had been
+      arriving. A genuinely dead helper is caught where it actually shows up,
+      in accel.onExited.
+    */
     Timer {
         id: watchdog
         interval: 1000
         repeat: false
         onTriggered: {
-            root.sensorOk = false;
-            root.setFault("stalled");
+            root.latS = 0;
+            root.foreS = 0;
             root.shiftX = 0;
             root.shiftY = 0;
+            root.motionLevel = 0;
+            root.updateMotionState();
         }
     }
 
@@ -326,12 +355,20 @@ PluginComponent {
         lastSampleT = now;
 
         if (!gravityInit) {
-            gx = ax;
-            gy = ay;
-            gz = az;
+            gx = ogx = ax;
+            gy = ogy = ay;
+            gz = ogz = az;
             gravityInit = true;
             return;
         }
+
+        const oAlpha = dt > 0 ? 1 - Math.exp(-dt / orientTau) : 0;
+        ogx += (ax - ogx) * oAlpha;
+        ogy += (ay - ogy) * oAlpha;
+        ogz += (az - ogz) * oAlpha;
+        const ogm = Math.sqrt(ogx * ogx + ogy * ogy + ogz * ogz);
+        if (ogm > 0.5)
+            updateOrientation(ogx / ogm, ogy / ogm);
 
         const alpha = dt > 0 ? 1 - Math.exp(-dt / gravityTau) : 0;
         gx += (ax - gx) * alpha;
@@ -358,9 +395,6 @@ PluginComponent {
         const cAlpha = dt > 0 ? 1 - Math.exp(-dt / cueTau) : 0;
         latS += (lat - latS) * cAlpha;
         foreS += (fore - foreS) * cAlpha;
-
-        if (manageRotation)
-            updateOrientation(gx / gravityMag, gy / gravityMag);
 
         const mag = Math.sqrt(lx * lx + ly * ly + lz * lz);
         const mAlpha = dt > 0 ? 1 - Math.exp(-dt / 3.0) : 0;
@@ -595,9 +629,37 @@ PluginComponent {
     // screen twice on the way.
     Timer {
         id: dwell
-        interval: 700
+        interval: 400
         repeat: false
-        onTriggered: root.rotate(root.proposedTransform)
+        onTriggered: {
+            root.resyncGravity();
+            root.rotate(root.proposedTransform);
+        }
+    }
+
+    /*
+      A committed reorientation is not vehicle motion, so hand the slow
+      estimate the answer instead of letting it spend ~2.5 s getting there.
+      Otherwise the stale estimate is subtracted from the real one for that
+      whole time, and the rotation itself reads as a hard acceleration --
+      the dots slam to one edge just as the screen turns.
+
+      Runs whether or not this plugin drives the rotation: the cues need the
+      right gravity either way. The axis basis is dropped too so screenAxes()
+      rebuilds it from the new vector -- unless rotation is locked, where the
+      frozen basis is the point.
+    */
+    function resyncGravity() {
+        const m = Math.sqrt(ogx * ogx + ogy * ogy + ogz * ogz);
+        if (m < 0.5)
+            return;
+        gx = ogx * gravityMag / m;
+        gy = ogy * gravityMag / m;
+        gz = ogz * gravityMag / m;
+        latS = 0;
+        foreS = 0;
+        if (!rotationLocked)
+            lastAxes = null;
     }
 
     Process {

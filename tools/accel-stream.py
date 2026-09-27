@@ -25,6 +25,7 @@ here needs to run as root at runtime.
 """
 import argparse
 import os
+import signal
 import struct
 import sys
 
@@ -114,6 +115,37 @@ def main():
     # owner makes the open fail with EBUSY.
     already_armed = rd(dev, buf + "/enable") == "1"
 
+    # An armed buffer we can nonetheless OPEN has no owner -- the kernel
+    # refuses a second open with EBUSY. That is the usual state after a
+    # previous run of this helper was killed before it could disarm (see the
+    # SIGTERM note in __main__). Reclaim it: disarm, then carry on as if it
+    # had never been armed, so the seed and the sample rate below still apply.
+    if already_armed:
+        try:
+            probe = open(node, "rb", buffering=0)
+        except OSError as e:
+            return fail("BUSY: %s is held by another process, almost certainly "
+                        "iio-sensor-proxy serving screen autorotation (%s). Only one "
+                        "process can own an IIO buffer." % (node, e))
+        probe.close()
+        if wr(dev, buf + "/enable", 0):
+            already_armed = False
+
+    # The hub only reports on CHANGE, even through the buffer (0 records in 6 s
+    # at rest), so a consumer started on a still machine would otherwise hear
+    # nothing at all until it moved -- no gravity estimate, no orientation, and
+    # a "no data" status that is not true. Seed one reading from sysfs first.
+    # That is the one job sysfs does do reliably: after the sensor has been
+    # idle, a single read returns a fresh report. Only possible before the
+    # buffer is armed, which is why it goes here.
+    if not already_armed:
+        try:
+            x, y, z = (int(rd(dev, "in_accel_%s_raw" % a)) for a in "xyz")
+            sys.stdout.write("%.6f %.6f %.6f\n" % (x * scale, y * scale, z * scale))
+            sys.stdout.flush()
+        except (TypeError, ValueError):
+            pass
+
     if not already_armed:
         for axis in "xyz":
             wr(dev, "scan_elements/in_accel_%s_en" % axis, 1)
@@ -160,6 +192,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # Quickshell stops this helper with SIGTERM, and Python's default handler
+    # dies on the spot WITHOUT running `finally` -- which left the buffer armed
+    # after every stop. Turn it into a normal exit so the disarm runs.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         sys.exit(main())
     except KeyboardInterrupt:
