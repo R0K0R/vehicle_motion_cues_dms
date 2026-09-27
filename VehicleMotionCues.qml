@@ -67,7 +67,11 @@ PluginComponent {
         return (v === undefined || v === null) ? fallback : v;
     }
 
-    readonly property bool cuesEnabled: opt("enabled", false) === true
+    // NOT "enabled": that key is DMS's own "this plugin is loaded" flag, which
+    // the home-manager module writes as true -- so the cues came up on with
+    // the plugin, and turning them off would have disabled the plugin (and
+    // with it autorotation).
+    readonly property bool cuesEnabled: opt("cuesOn", false) === true
     readonly property bool autoHide: opt("autoHide", true) === true
     /*
       Geometry settings are 0 = AUTO by default, resolved per screen as a
@@ -630,7 +634,7 @@ PluginComponent {
 
     function setEnabled(on) {
         if (pluginService)
-            pluginService.savePluginData(pluginId, "enabled", on === true);
+            pluginService.savePluginData(pluginId, "cuesOn", on === true);
     }
 
     IpcHandler {
